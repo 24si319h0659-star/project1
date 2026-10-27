@@ -1,11 +1,413 @@
+
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>학생 바코드 기록 관리</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: Arial, sans-serif;
+      background: #f3f6fb;
+      margin: 0;
+      color: #1f2937;
+    }
+
+    header {
+      background: #173b82;
+      color: white;
+      padding: 24px;
+      text-align: center;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 25px auto;
+      padding: 0 15px;
+    }
+
+    section {
+      background: white;
+      padding: 22px;
+      margin-bottom: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px #0000000c;
+    }
+
+    h2 { margin-top: 0; }
+
+    input, button {
+      font-size: 16px;
+      padding: 11px;
+      border-radius: 7px;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      margin: 8px 0;
+    }
+
+    button {
+      border: none;
+      cursor: pointer;
+      background: #2457c5;
+      color: white;
+      margin: 5px 3px 5px 0;
+    }
+
+    button:hover { opacity: 0.85; }
+
+    .delete { background: #dc2626; }
+    .secondary { background: #475569; }
+
+    #message {
+      margin-top: 12px;
+      font-weight: bold;
+    }
+
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+      min-width: 460px;
+    }
+
+    th, td {
+      padding: 12px;
+      border-bottom: 1px solid #e5e7eb;
+      text-align: center;
+    }
+
+    th { background: #eef2ff; }
+
+    .info {
+      color: #64748b;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+  </style>
 </head>
+
 <body>
-    hello
+<header>
+  <h1>학생 바코드 기록 관리</h1>
+  <p>바코드 스캔 · 학생 조회 · 당일 기록 정리</p>
+</header>
+
+<main>
+  <section>
+    <h2>1. 학생 명단 등록</h2>
+    <p class="info">
+      CSV 파일 형식: 바코드,학년,이름<br>
+      예: 2026001,2,김민지
+    </p>
+
+    <input type="file" id="csvFile" accept=".csv">
+    <button onclick="loadCSV()">명단 불러오기</button>
+    <button class="secondary" onclick="loadExample()">예시 명단 사용</button>
+
+    <p id="rosterMessage" class="info"></p>
+  </section>
+
+  <section>
+    <h2>2. 학생증 바코드 스캔</h2>
+
+    <input
+      type="text"
+      id="barcode"
+      placeholder="학생증 바코드를 스캔하세요"
+      autocomplete="off"
+    >
+
+    <button onclick="scanStudent()">학생 기록 추가</button>
+    <button class="secondary" onclick="focusBarcode()">스캔 입력칸 선택</button>
+
+    <p id="message" aria-live="polite"></p>
+  </section>
+
+  <section>
+    <h2>3. 오늘의 기록</h2>
+
+    <p>기록 수: <strong id="total">0</strong></p>
+
+    <input
+      type="search"
+      id="search"
+      placeholder="학생 이름 또는 학년 검색"
+      oninput="renderRecords()"
+    >
+
+    <button onclick="downloadCSV()">기록 CSV 다운로드</button>
+    <button class="delete" onclick="clearRecords()">오늘 기록 전체 삭제</button>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>번호</th>
+            <th>학년</th>
+            <th>이름</th>
+            <th>기록 시각</th>
+            <th>관리</th>
+          </tr>
+        </thead>
+        <tbody id="recordTable"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <p class="info">
+    주의: 이 버전은 현재 브라우저에 기록을 저장합니다.
+    다른 기기와 실시간으로 공유하려면 서버와 데이터베이스가 필요합니다.
+  </p>
+</main>
+
+<script>
+  // 바코드 번호를 기준으로 학생을 조회하는 명단
+  let students = {};
+
+  // 오늘 스캔한 학생 기록
+  let records = [];
+
+  function getToday() {
+    const d = new Date();
+    return d.getFullYear() + "-" +
+      String(d.getMonth() + 1).padStart(2, "0") + "-" +
+      String(d.getDate()).padStart(2, "0");
+  }
+
+  function storageKey() {
+    return "studentRecords_" + getToday();
+  }
+
+  // 오늘 기록 불러오기
+  try {
+    records = JSON.parse(localStorage.getItem(storageKey()) || "[]");
+  } catch (e) {
+    records = [];
+  }
+
+  function saveRecords() {
+    localStorage.setItem(storageKey(), JSON.stringify(records));
+  }
+
+  // CSV 명단 파일 읽기
+  async function loadCSV() {
+    const file = document.getElementById("csvFile").files[0];
+
+    if (!file) {
+      alert("먼저 학생 명단 CSV 파일을 선택하세요.");
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+      const newStudents = {};
+
+      lines.forEach((line, index) => {
+        if (!line.trim()) return;
+
+        const columns = line.split(",").map(v => v.trim());
+
+        // 첫 번째 행이 제목이면 건너뛰기
+        if (index === 0 &&
+            columns[0].toLowerCase() === "바코드") {
+          return;
+        }
+
+        const [barcode, grade, name] = columns;
+
+        if (barcode && grade && name) {
+          newStudents[barcode] = { grade, name };
+        }
+      });
+
+      if (Object.keys(newStudents).length === 0) {
+        alert("명단을 읽지 못했습니다. CSV 형식을 확인하세요.");
+        return;
+      }
+
+      students = newStudents;
+
+      document.getElementById("rosterMessage").textContent =
+        Object.keys(students).length + "명의 학생 명단을 불러왔습니다.";
+
+      focusBarcode();
+    } catch (error) {
+      alert("파일을 읽는 중 오류가 발생했습니다.");
+    }
+  }
+
+  // 테스트용 학생 명단
+  function loadExample() {
+    students = {
+      "2026001": { grade: "1", name: "김민지" },
+      "2026002": { grade: "2", name: "이준호" },
+      "2026003": { grade: "3", name: "박서연" }
+    };
+
+    document.getElementById("rosterMessage").textContent =
+      "예시 학생 3명을 등록했습니다.";
+
+    focusBarcode();
+  }
+
+  // 바코드로 학생 조회 후 기록 추가
+  function scanStudent() {
+    const input = document.getElementById("barcode");
+    const barcode = input.value.trim();
+    const message = document.getElementById("message");
+
+    if (!barcode) {
+      message.textContent = "바코드를 먼저 스캔하세요.";
+      message.style.color = "red";
+      input.focus();
+      return;
+    }
+
+    const student = students[barcode];
+
+    if (!student) {
+      message.textContent = "등록되지 않은 바코드입니다.";
+      message.style.color = "red";
+      input.select();
+      return;
+    }
+
+    const now = new Date();
+
+    records.unshift({
+      barcode: barcode,
+      grade: student.grade,
+      name: student.name,
+      date: getToday(),
+      time: now.toLocaleTimeString("ko-KR", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      })
+    });
+
+    saveRecords();
+    renderRecords();
+
+    message.textContent =
+      student.grade + "학년 " + student.name + " 학생 기록 완료!";
+    message.style.color = "green";
+
+    input.value = "";
+    input.focus();
+  }
+
+  // 스캐너가 Enter를 보내면 자동 등록
+  document.getElementById("barcode").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      scanStudent();
+    }
+  });
+
+  function focusBarcode() {
+    document.getElementById("barcode").focus();
+  }
+
+  // 기록 표 출력
+  function renderRecords() {
+    const table = document.getElementById("recordTable");
+    const query = document.getElementById("search").value.trim().toLowerCase();
+
+    table.replaceChildren();
+
+    const filtered = records.filter(r =>
+      String(r.name).toLowerCase().includes(query) ||
+      String(r.grade).toLowerCase().includes(query) ||
+      String(r.barcode).toLowerCase().includes(query)
+    );
+
+    document.getElementById("total").textContent = records.length;
+
+    if (filtered.length === 0) {
+      const row = table.insertRow();
+      const cell = row.insertCell();
+      cell.colSpan = 5;
+      cell.textContent = "기록이 없습니다.";
+      return;
+    }
+
+    filtered.forEach((r, index) => {
+      const row = table.insertRow();
+
+      [index + 1, r.grade + "학년", r.name, r.time]
+        .forEach(value => {
+          row.insertCell().textContent = value;
+        });
+
+      const actionCell = row.insertCell();
+      const button = document.createElement("button");
+
+      button.textContent = "삭제";
+      button.className = "delete";
+
+      button.onclick = () => {
+        records = records.filter(item => item !== r);
+        saveRecords();
+        renderRecords();
+      };
+
+      actionCell.appendChild(button);
+    });
+  }
+
+  // CSV 파일로 기록 다운로드
+  function downloadCSV() {
+    const rows = [
+      ["날짜", "바코드", "학년", "이름", "기록 시각"],
+      ...records.map(r => [
+        r.date, r.barcode, r.grade, r.name, r.time
+      ])
+    ];
+
+    const csv = "\uFEFF" + rows.map(row =>
+      row.map(value =>
+        '"' + String(value).replace(/"/g, '""') + '"'
+      ).join(",")
+    ).join("\r\n");
+
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;"
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "학생기록_" + getToday() + ".csv";
+    link.click();
+
+    URL.revokeObjectURL(url);
+  }
+
+  // 오늘 기록 삭제
+  function clearRecords() {
+    if (!confirm("오늘의 모든 기록을 삭제할까요?")) return;
+
+    records = [];
+    saveRecords();
+    renderRecords();
+
+    document.getElementById("message").textContent =
+      "오늘 기록을 삭제했습니다.";
+  }
+
+  // 페이지 시작 시 기록 표시
+  renderRecords();
+</script>
 </body>
 </html>
